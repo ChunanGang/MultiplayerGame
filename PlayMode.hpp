@@ -1,5 +1,6 @@
 #include "Mode.hpp"
-
+#include "Scene.hpp"
+#include "Sound.hpp"
 #include "Connection.hpp"
 
 #include <glm/glm.hpp>
@@ -23,6 +24,20 @@ struct PlayMode : Mode {
 		uint8_t downs = 0;
 		uint8_t pressed = 0;
 	} left, right, down, up;
+
+	//local copy of the game scene (so code can change it during gameplay):
+	Scene scene;
+
+	// player info
+	struct Player {
+		//transform is at player's feet and will be yawed by mouse left/right motion:
+		Scene::Transform *transform = nullptr;
+		//camera is at player's head and will be pitched by mouse up/down motion:
+		Scene::Camera *camera = nullptr;
+	} player;
+
+	const glm::vec3 playerInitPos = glm::vec3(-7,-1,0);
+	const glm::quat playerInitRot = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 
 	//last message from server:
 	std::string server_message;

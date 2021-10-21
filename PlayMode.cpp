@@ -1,15 +1,78 @@
 #include "PlayMode.hpp"
-
+#include "LitColorTextureProgram.hpp"
 #include "DrawLines.hpp"
 #include "gl_errors.hpp"
+#include "Mesh.hpp"
 #include "data_path.hpp"
+#include "Load.hpp"
 #include "hex_dump.hpp"
+#include "data_path.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #include <random>
 
-PlayMode::PlayMode(Client &client_) : client(client_) {
+GLuint stage_meshes_for_lit_color_texture_program = 0;
+Load< MeshBuffer > stage_meshes(LoadTagDefault, []() -> MeshBuffer const * {
+	MeshBuffer const *ret = new MeshBuffer(data_path("city.pnct"));
+	stage_meshes_for_lit_color_texture_program = ret->make_vao_for_program(lit_color_texture_program->program);
+	return ret;
+});
+
+Load< Scene > stage_scene(LoadTagDefault, []() -> Scene const * {
+	return new Scene(data_path("city.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
+		Mesh const &mesh = stage_meshes->lookup(mesh_name);
+
+		scene.drawables.emplace_back(transform);
+		Scene::Drawable &drawable = scene.drawables.back();
+
+		drawable.pipeline = lit_color_texture_program_pipeline;
+
+		drawable.pipeline.vao = stage_meshes_for_lit_color_texture_program;
+		drawable.pipeline.type = mesh.type;
+		drawable.pipeline.start = mesh.start;
+		drawable.pipeline.count = mesh.count;
+
+	});
+});
+
+PlayMode::PlayMode(Client &client_) : client(client_),scene(*stage_scene) {
+
+	// for (auto &transform : scene.transforms) {
+	// 	//std::cout << "(" << transform.name <<  ")" << std::endl;
+	// 	if (transform.name == "Goal") goal = &transform;
+	// }
+	// goal->colorModifier = goalDefaultColor;
+	// auto mat = goal->make_local_to_world();
+	// goalWorldPos = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
+
+	//create a player transform:
+	scene.transforms.emplace_back();
+	player.transform = &scene.transforms.back();
+
+	//create a player camera attached to a child of the player transform:
+	scene.transforms.emplace_back();
+	scene.cameras.emplace_back(&scene.transforms.back());
+	player.camera = &scene.cameras.back();
+	player.camera->fovy = glm::radians(60.0f);
+	player.camera->near = 0.01f;
+	player.camera->transform->parent = player.transform;
+
+	//player's eyes are 1.8 units above the ground:
+	player.camera->transform->position = glm::vec3(0.0f, 0.0f, 0.7f);
+
+	//rotate camera facing direction (-z) to player facing direction (+y):
+	player.camera->transform->rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+
+	//start player walking at nearest walk point:
+	player.transform->position = playerInitPos;
+	player.transform->rotation = playerInitRot;
+
+	// font
+	// hintFont = std::make_shared<TextRenderer>(data_path("OpenSans-B9K8.ttf"));
+	// messageFont = std::make_shared<TextRenderer>(data_path("SeratUltra-1GE24.ttf"));
+
 }
 
 PlayMode::~PlayMode() {
@@ -83,10 +146,10 @@ void PlayMode::update(float elapsed) {
 			std::cout << "[" << c->socket << "] closed (!)" << std::endl;
 			throw std::runtime_error("Lost connection to server!");
 		} else { assert(event == Connection::OnRecv);
-			std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+			//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 			//expecting message(s) like 'm' + 3-byte length + length bytes of text:
 			while (c->recv_buffer.size() >= 4) {
-				std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+				//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 				char type = c->recv_buffer[0];
 				if (type != 'm') {
 					throw std::runtime_error("Server sent unknown message type '" + std::to_string(type) + "'");
@@ -106,8 +169,25 @@ void PlayMode::update(float elapsed) {
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
+
+	//update camera aspect ratio for drawable:
+	player.camera->aspect = float(drawable_size.x) / float(drawable_size.y);
+
+	//set up light type and position for lit_color_texture_program:
+	glUseProgram(lit_color_texture_program->program);
+	glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
+	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
+	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
+	glUseProgram(0);
+
 	glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
-	glClear(GL_COLOR_BUFFER_BIT);
+	glClearDepth(1.0f); //1.0 is actually the default value to clear the depth buffer to, but FYI you can change it.
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	glEnable(GL_DEPTH_TEST);
+	glDepthFunc(GL_LESS); //this is the default depth comparison function, but FYI you can change it.
+
+	scene.draw(*player.camera);
 
 	{ //use DrawLines to overlay some text:
 		glDisable(GL_DEPTH_TEST);
