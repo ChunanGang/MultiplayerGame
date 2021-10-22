@@ -80,23 +80,24 @@ PlayMode::~PlayMode() {
 
 bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size) {
 
+	// wasd
 	if (evt.type == SDL_KEYDOWN) {
+		if (evt.key.keysym.sym == SDLK_ESCAPE) {
+			SDL_SetRelativeMouseMode(SDL_FALSE);
+			return true;
+		}
 		if (evt.key.repeat) {
 			//ignore repeats
 		} else if (evt.key.keysym.sym == SDLK_a) {
-			left.downs += 1;
 			left.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_d) {
-			right.downs += 1;
 			right.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_w) {
-			up.downs += 1;
 			up.pressed = true;
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_s) {
-			down.downs += 1;
 			down.pressed = true;
 			return true;
 		}
@@ -114,6 +115,32 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			down.pressed = false;
 			return true;
 		}
+	} else if (evt.type == SDL_MOUSEBUTTONDOWN) {
+		if (SDL_GetRelativeMouseMode() == SDL_FALSE) {
+			SDL_SetRelativeMouseMode(SDL_TRUE);
+			return true;
+		}
+	}
+	
+	// mouse
+	if (evt.type == SDL_MOUSEMOTION) {
+		if (SDL_GetRelativeMouseMode() == SDL_TRUE) {
+			player.mouse_x = evt.motion.xrel / float(window_size.y),
+			player.mouse_y = -evt.motion.yrel / float(window_size.y);
+
+			/*
+			glm::vec3 up = glm::vec3(0,0,1);
+			player.transform->rotation = glm::angleAxis(-motion.x * player.camera->fovy, up) * player.transform->rotation;
+
+			float pitch = glm::pitch(player.camera->transform->rotation);
+			pitch += motion.y * player.camera->fovy;
+			//camera looks down -z (basically at the player's feet) when pitch is at zero.
+			pitch = std::min(pitch, 0.95f * 3.1415926f);
+			pitch = std::max(pitch, 0.05f * 3.1415926f);
+			player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));*/
+
+			return true;
+		}
 	}
 
 	return false;
@@ -121,22 +148,26 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 
 void PlayMode::update(float elapsed) {
 
-	//queue data for sending to server:
-	//TODO: send something that makes sense for your game
-	if (left.downs || right.downs || down.downs || up.downs) {
-		//send a five-byte message of type 'b':
+	// sending to server:
+	if (left.pressed || right.pressed || down.pressed || up.pressed || player.mouse_x!=0 ) {
+		// type 'b' message : 9 byte total (char + bool x 4 + float)
+		// 1 byte
 		client.connections.back().send('b');
-		client.connections.back().send(left.downs);
-		client.connections.back().send(right.downs);
-		client.connections.back().send(down.downs);
-		client.connections.back().send(up.downs);
-	}
+		// 1 X 4 bytes
+		client.connections.back().send(left.pressed);
+		client.connections.back().send(right.pressed);
+		client.connections.back().send(down.pressed);
+		client.connections.back().send(up.pressed);
+		// 4 bytes (float)
+		// first convert float into 4 bytes (char array)
+		unsigned char const * mouse_x_bytes = reinterpret_cast<unsigned char const *>(&player.mouse_x);
+		client.connections.back().send(mouse_x_bytes[0]);
+		client.connections.back().send(mouse_x_bytes[1]);
+		client.connections.back().send(mouse_x_bytes[2]);
+		client.connections.back().send(mouse_x_bytes[3]);
 
-	//reset button press counters:
-	left.downs = 0;
-	right.downs = 0;
-	up.downs = 0;
-	down.downs = 0;
+		//std::cout << "x: " << std::to_string(player.mouse_x) <<std::endl;
+	}
 
 	//send/receive data:
 	client.poll([this](Connection *c, Connection::Event event){
@@ -146,7 +177,7 @@ void PlayMode::update(float elapsed) {
 			std::cout << "[" << c->socket << "] closed (!)" << std::endl;
 			throw std::runtime_error("Lost connection to server!");
 		} else { assert(event == Connection::OnRecv);
-			//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+			std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 			//expecting message(s) like 'm' + 3-byte length + length bytes of text:
 			while (c->recv_buffer.size() >= 4) {
 				//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();

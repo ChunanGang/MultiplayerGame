@@ -2,12 +2,16 @@
 #include "Connection.hpp"
 
 #include "hex_dump.hpp"
+#include <glm/glm.hpp>
 
 #include <chrono>
 #include <stdexcept>
 #include <iostream>
 #include <cassert>
 #include <unordered_map>
+
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtx/quaternion.hpp>
 
 #ifdef _WIN32
 extern "C" { uint32_t GetACP(); }
@@ -51,16 +55,13 @@ int main(int argc, char **argv) {
 			static uint32_t next_player_id = 1;
 			name = "Player" + std::to_string(next_player_id);
 			next_player_id += 1;
+			position = glm::vec3(-7,-1,0);;
+			rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		}
 		std::string name;
 
-		uint32_t left_presses = 0;
-		uint32_t right_presses = 0;
-		uint32_t up_presses = 0;
-		uint32_t down_presses = 0;
-
-		int32_t total = 0;
-
+		glm::vec3 position;
+		glm::quat rotation;
 	};
 	std::unordered_map< Connection *, PlayerInfo > players;
 
@@ -93,17 +94,16 @@ int main(int argc, char **argv) {
 
 				} else { assert(evt == Connection::OnRecv);
 					//got data from client:
-					std::cout << "got bytes:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+					//std::cout << "got bytes:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 
 					//look up in players list:
 					auto f = players.find(c);
 					assert(f != players.end());
 					PlayerInfo &player = f->second;
 
-					//handle messages from client:
-					//TODO: update for the sorts of messages your clients send
-					while (c->recv_buffer.size() >= 5) {
-						//expecting five-byte messages 'b' (left count) (right count) (down count) (up count)
+					// --------------- handle messages from client ---------------- //
+					while (c->recv_buffer.size() >= 9) {
+						// expecting 9-byte messages 'b' (1 + 1x4 + 4)
 						char type = c->recv_buffer[0];
 						if (type != 'b') {
 							std::cout << " message of non-'b' type received from client!" << std::endl;
@@ -111,17 +111,24 @@ int main(int argc, char **argv) {
 							c->close();
 							return;
 						}
-						uint8_t left_count = c->recv_buffer[1];
-						uint8_t right_count = c->recv_buffer[2];
-						uint8_t down_count = c->recv_buffer[3];
-						uint8_t up_count = c->recv_buffer[4];
-
-						player.left_presses += left_count;
-						player.right_presses += right_count;
-						player.down_presses += down_count;
-						player.up_presses += up_count;
-
-						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 5);
+						// 4 boold
+						bool left_pressed = c->recv_buffer[1];
+						bool right_pressed = c->recv_buffer[2];
+						bool down_pressed = c->recv_buffer[3];
+						bool up_pressed = c->recv_buffer[4];
+						// 1 float, as 4 bytes
+						union float_as_byte
+						{
+								float   f;
+								unsigned char bytes[4];
+						} mouse_x;
+						mouse_x.bytes[0] = c->recv_buffer[5];
+						mouse_x.bytes[1] = c->recv_buffer[6];
+						mouse_x.bytes[2] = c->recv_buffer[7];
+						mouse_x.bytes[3] = c->recv_buffer[8];
+						//std::cout << "x: " + std::to_string(mouse_x.f) <<  "\n";
+						// erase 9 bytes
+						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 9);
 					}
 				}
 			}, remain);
@@ -132,23 +139,24 @@ int main(int argc, char **argv) {
 		std::string status_message = "";
 		int32_t overall_sum = 0;
 		for (auto &[c, player] : players) {
-			(void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
-			for (; player.left_presses > 0; --player.left_presses) {
-				player.total -= 1;
-			}
-			for (; player.right_presses > 0; --player.right_presses) {
-				player.total += 1;
-			}
-			for (; player.down_presses > 0; --player.down_presses) {
-				player.total -= 10;
-			}
-			for (; player.up_presses > 0; --player.up_presses) {
-				player.total += 10;
-			}
-			if (status_message != "") status_message += " + ";
-			status_message += std::to_string(player.total) + " (" + player.name + ")";
+			std::cout << "socket: " << c->socket << std::endl;
+			// (void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
+			// for (; player.left_presses > 0; --player.left_presses) {
+			// 	player.total -= 1;
+			// }
+			// for (; player.right_presses > 0; --player.right_presses) {
+			// 	player.total += 1;
+			// }
+			// for (; player.down_presses > 0; --player.down_presses) {
+			// 	player.total -= 10;
+			// }
+			// for (; player.up_presses > 0; --player.up_presses) {
+			// 	player.total += 10;
+			// }
+			// if (status_message != "") status_message += " + ";
+			// status_message += std::to_string(player.total) + " (" + player.name + ")";
 
-			overall_sum += player.total;
+			// overall_sum += player.total;
 		}
 		status_message += " = " + std::to_string(overall_sum);
 		//std::cout << status_message << std::endl; //DEBUG
