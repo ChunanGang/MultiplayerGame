@@ -37,15 +37,27 @@ Load< Scene > stage_scene(LoadTagDefault, []() -> Scene const * {
 	});
 });
 
+Load< Sound::Sample > countDown(LoadTagDefault, []() -> Sound::Sample const * {
+	return new Sound::Sample(data_path("countdown.opus"));
+});
+
 PlayMode::PlayMode(Client &client_) : client(client_),scene(*stage_scene) {
 
-	// for (auto &transform : scene.transforms) {
-	// 	//std::cout << "(" << transform.name <<  ")" << std::endl;
-	// 	if (transform.name == "Goal") goal = &transform;
-	// }
-	// goal->colorModifier = goalDefaultColor;
-	// auto mat = goal->make_local_to_world();
-	// goalWorldPos = glm::vec3(mat[3][0], mat[3][1], mat[3][2]);
+	// get the transforms of all players' models 
+	for (auto &transform : scene.transforms) {
+		if (transform.name == "Player1") {
+			players_transform[0] = &transform;
+		}
+		else if (transform.name == "Player2") 
+			players_transform[1] = &transform;
+		else if (transform.name == "Player3") 
+			players_transform[2] = &transform;
+		else if (transform.name == "Player4") 
+			players_transform[3] = &transform;
+	}
+	// disable other players' drawing, util recieve other players' info from server
+	for (size_t i =0; i < players_transform.size(); i++)
+		players_transform[i]->draw = false;
 
 	//create a player transform:
 	scene.transforms.emplace_back();
@@ -59,20 +71,15 @@ PlayMode::PlayMode(Client &client_) : client(client_),scene(*stage_scene) {
 	player.camera->near = 0.01f;
 	player.camera->transform->parent = player.transform;
 
-	//player's eyes are 1.8 units above the ground:
-	player.camera->transform->position = glm::vec3(0.0f, 0.0f, 0.7f);
+	// cam offset
+	player.camera->transform->position = cameraOffset;
 
 	//rotate camera facing direction (-z) to player facing direction (+y):
 	player.camera->transform->rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
-	//start player walking at nearest walk point:
-	player.transform->position = playerInitPos;
-	player.transform->rotation = playerInitRot;
-
 	// font
-	// hintFont = std::make_shared<TextRenderer>(data_path("OpenSans-B9K8.ttf"));
-	// messageFont = std::make_shared<TextRenderer>(data_path("SeratUltra-1GE24.ttf"));
-
+	hintFont = std::make_shared<TextRenderer>(data_path("OpenSans-B9K8.ttf"));
+	messageFont = std::make_shared<TextRenderer>(data_path("SeratUltra-1GE24.ttf"));
 }
 
 PlayMode::~PlayMode() {
@@ -128,16 +135,15 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			player.mouse_x = evt.motion.xrel / float(window_size.y),
 			player.mouse_y = -evt.motion.yrel / float(window_size.y);
 
-			/*
 			glm::vec3 up = glm::vec3(0,0,1);
-			player.transform->rotation = glm::angleAxis(-motion.x * player.camera->fovy, up) * player.transform->rotation;
+			player.transform->rotation = glm::angleAxis(-player.mouse_x * player.camera->fovy, up) * player.transform->rotation;
 
 			float pitch = glm::pitch(player.camera->transform->rotation);
-			pitch += motion.y * player.camera->fovy;
+			pitch += player.mouse_y * player.camera->fovy;
 			//camera looks down -z (basically at the player's feet) when pitch is at zero.
 			pitch = std::min(pitch, 0.95f * 3.1415926f);
 			pitch = std::max(pitch, 0.05f * 3.1415926f);
-			player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));*/
+			player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 
 			return true;
 		}
@@ -148,25 +154,62 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 
 void PlayMode::update(float elapsed) {
 
-	// sending to server:
-	if (left.pressed || right.pressed || down.pressed || up.pressed || player.mouse_x!=0 ) {
-		// type 'b' message : 9 byte total (char + bool x 4 + float)
-		// 1 byte
-		client.connections.back().send('b');
-		// 1 X 4 bytes
-		client.connections.back().send(left.pressed);
-		client.connections.back().send(right.pressed);
-		client.connections.back().send(down.pressed);
-		client.connections.back().send(up.pressed);
-		// 4 bytes (float)
-		// first convert float into 4 bytes (char array)
-		unsigned char const * mouse_x_bytes = reinterpret_cast<unsigned char const *>(&player.mouse_x);
-		client.connections.back().send(mouse_x_bytes[0]);
-		client.connections.back().send(mouse_x_bytes[1]);
-		client.connections.back().send(mouse_x_bytes[2]);
-		client.connections.back().send(mouse_x_bytes[3]);
+	// update my own transform locally
+	{
+		//combine inputs into a force:
+		glm::vec2 force = glm::vec2(0.0f);
+		if (left.pressed && !right.pressed) force.x =-1.0f;
+		if (!left.pressed && right.pressed) force.x = 1.0f;
+		if (down.pressed && !up.pressed) force.y =-1.0f;
+		if (!down.pressed && up.pressed) force.y = 1.0f;
+		// update velocity
+		glm::vec2 newVelocity = glm::vec3(0);
+		// apllying force (has input)
+		if (force != glm::vec2(0.0f)) {
+			force = glm::normalize(force);
+			// new velicoty
+			newVelocity = curVelocity + force * acceleration * elapsed;
+		}
+		// no force, use firction
+		else{
+			if (curVelocity != glm::vec2(0)){
+				newVelocity = curVelocity - glm::normalize(curVelocity) * friction * elapsed;
+				// make sure frictiuon does not change the direction
+				if ((curVelocity.x>0 && newVelocity.x <0) || (curVelocity.x<0 && newVelocity.x >0))
+					newVelocity.x = 0;
+				if ((curVelocity.y>0 && newVelocity.y <0) || (curVelocity.y<0 && newVelocity.y >0)) 
+					newVelocity.y = 0;
+			}
+		}
+		// movement
+		glm::vec2 move = (newVelocity + curVelocity) / 2.0f * elapsed;
+		curVelocity = newVelocity;
+		// update position
+		player.transform->position += player.transform->make_local_to_world() * glm::vec4(move.x, move.y, 0.0f, 0.0f);
+		// update my model's transform, if i know which model is mine
+		if(player.id!=0){
+			players_transform[player.id-1]->position = player.transform->position;
+			players_transform[player.id-1]->rotation = player.transform->rotation;
+		}
+	}
 
-		//std::cout << "x: " << std::to_string(player.mouse_x) <<std::endl;
+	// sending my info (position , rotation) to server:
+	if (left.pressed || right.pressed || down.pressed || up.pressed || player.mouse_x!=0 ) {
+		// type 'b' message : char + vec3 + quat
+		// char
+		client.connections.back().send('b');
+		// position
+		vec3_as_byte position_bytes;
+		position_bytes.vec3_value = player.transform->position;
+		for (size_t i =0; i < sizeof(glm::vec3); i++){
+			client.connections.back().send(position_bytes.bytes_value[i]);
+		}
+		// rotation
+		quat_as_byte rotation_bytes;
+		rotation_bytes.quat_value = player.transform->rotation;
+		for (size_t i =0; i < sizeof(glm::quat); i++){
+			client.connections.back().send(rotation_bytes.bytes_value[i]);
+		}
 	}
 
 	//send/receive data:
@@ -177,7 +220,7 @@ void PlayMode::update(float elapsed) {
 			std::cout << "[" << c->socket << "] closed (!)" << std::endl;
 			throw std::runtime_error("Lost connection to server!");
 		} else { assert(event == Connection::OnRecv);
-			std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+			//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 			//expecting message(s) like 'm' + 3-byte length + length bytes of text:
 			while (c->recv_buffer.size() >= 4) {
 				//std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
@@ -197,6 +240,82 @@ void PlayMode::update(float elapsed) {
 			}
 		}
 	}, 0.0);
+
+	// update local state according to the server's message
+	{
+		size_t i_offset = 1; // message after this contains players' individual infos
+
+		// read the public stuff before offset. These are infos same for all players.
+		bool serverPlaySound = (bool)server_message[0];
+
+		// read player's info one by one
+		for(size_t i =i_offset; i < server_message.size(); ){
+
+			// read the size of one client's info
+			uint32_t size = (
+				(uint32_t(server_message[i]) << 16) | (uint32_t(server_message[i+1]) << 8) | (uint32_t(server_message[i+2]))
+			);
+			// get content of this player
+			std::string content = server_message.substr(i+3, size);
+
+			// decode content 
+			// id
+			uint8_t id = (uint8_t)content[0];
+			// position
+			vec3_as_byte position;
+			for (size_t j =0; j < sizeof(glm::vec3); j++){
+				position.bytes_value[j] = content[j+1];
+			}
+			// rotation
+			quat_as_byte rotation;
+			for (size_t j =0; j < sizeof(glm::quat); j++){
+				rotation.bytes_value[j] = content[j+1+sizeof(glm::vec3)];
+			}
+
+			// is this my info ? (server will put my own info at first)
+			if(i == i_offset){
+				// if unkonwn before
+				if(player.id == 0){
+					player.id = id;
+					// set my init position and rotation accroding to my id
+					player.transform->position = playerInitPos + playerInitPosDistance * (float)(id-1);
+					player.transform->rotation = playerInitRot;
+					// enable my own model's drawing (delete if want to disable)
+					players_transform[id-1]->draw = true;
+				}
+			}
+			// other players' info
+			else{
+				players_transform[id-1]->draw = true;
+				players_transform[id-1]->position = position.vec3_value;
+				players_transform[id-1]->rotation = rotation.quat_value;
+			}
+
+			// move to next player's info
+			i += 3 + size;
+		}
+
+		// game logic update
+		// play sound
+		if(!playingSound && serverPlaySound) {
+			Sound::play_3D(*countDown, 1, glm::vec3(0));
+			playingSound = true;
+			startCountDown = true;
+			canMove = true;
+		}
+		// count down
+		if(startCountDown){
+			static float countDownCount = 0;
+			countDownCount += elapsed;
+			if(countDownCount >= countDownTime){
+				countDownCount = 0;
+				canMove = false;
+				startCountDown = false;
+				playingSound = false;
+			}
+		}
+	}
+
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
@@ -220,31 +339,14 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 
 	scene.draw(*player.camera);
 
-	{ //use DrawLines to overlay some text:
-		glDisable(GL_DEPTH_TEST);
-		float aspect = float(drawable_size.x) / float(drawable_size.y);
-		DrawLines lines(glm::mat4(
-			1.0f / aspect, 0.0f, 0.0f, 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		));
-
-		auto draw_text = [&](glm::vec2 const &at, std::string const &text, float H) {
-			lines.draw_text(text,
-				glm::vec3(at.x, at.y, 0.0),
-				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-				glm::u8vec4(0x00, 0x00, 0x00, 0x00));
-			float ofs = 2.0f / drawable_size.y;
-			lines.draw_text(text,
-				glm::vec3(at.x + ofs, at.y + ofs, 0.0),
-				glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
-		};
-
-		draw_text(glm::vec2(-aspect + 0.1f, 0.0f), server_message, 0.09f);
-
-		draw_text(glm::vec2(-aspect + 0.1f,-0.9f), "(press WASD to change your total)", 0.09f);
+	// text
+	hintFont->draw("Your Are Player " + std::to_string(player.id), 20.0f, 550.0f, glm::vec2(0.2,0.25), glm::vec3(0.2, 0.8f, 0.2f));
+	if(canMove){
+		messageFont->draw("Move Now", 20.0f, 500.0f, glm::vec2(0.2,0.25), glm::vec3(0.2, 0.8f, 0.2f));
 	}
+	else{
+		messageFont->draw("STOP !!!", 20.0f, 500.0f, glm::vec2(0.2,0.25), glm::vec3(1.0f, 0.2f, 0.2f));
+	}
+
 	GL_ERRORS();
 }

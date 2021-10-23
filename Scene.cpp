@@ -101,6 +101,8 @@ void Scene::draw(glm::mat4 const &world_to_clip, glm::mat4x3 const &world_to_lig
 		//skip any drawables that don't contain any vertices:
 		if (pipeline.count == 0) continue;
 
+		// skip if specified not to draw
+		if(!drawable.transform->draw) continue;
 
 		//Set shader program:
 		glUseProgram(pipeline.program);

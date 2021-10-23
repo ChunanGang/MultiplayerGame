@@ -1,9 +1,8 @@
-
 #include "Connection.hpp"
 
 #include "hex_dump.hpp"
 #include <glm/glm.hpp>
-
+#include "Unions.hpp"
 #include <chrono>
 #include <stdexcept>
 #include <iostream>
@@ -41,31 +40,78 @@ int main(int argc, char **argv) {
 
 	//------------ initialization ------------
 
-	Server server(argv[1]);
+	Server server(argv[1]); 
 
 
 	//------------ main loop ------------
-	constexpr float ServerTick = 1.0f / 10.0f; //TODO: set a server tick that makes sense for your game
+	constexpr float ServerTick = 1.0f / 20.0f; // set a server tick that makes sense for your game
 
 	//server state:
+	const uint16_t player_amount = 4; // only max 4 players in the game for now
+	const float soundWaitTime = 6.0f; // play sound every this much time
+	bool playSound = false;
 
 	//per-client state:
 	struct PlayerInfo {
 		PlayerInfo() {
-			static uint32_t next_player_id = 1;
-			name = "Player" + std::to_string(next_player_id);
+			static uint8_t next_player_id = 1;
+			id = next_player_id;
 			next_player_id += 1;
 			position = glm::vec3(-7,-1,0);;
 			rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		}
-		std::string name;
-
+		// convert player's info into bytes, with form of string
+		std::string toByteString(){
+			std::string result = "";
+			// id
+			result += (char)id;
+			// position
+			vec3_as_byte position_bytes;
+			position_bytes.vec3_value = position;
+			for (size_t i =0; i < sizeof(position); i++){
+				result += position_bytes.bytes_value[i];
+			}
+			// rotation
+			quat_as_byte rotation_bytes;
+			rotation_bytes.quat_value = rotation;
+			for (size_t i =0; i < sizeof(rotation); i++){
+				result += rotation_bytes.bytes_value[i];
+			}
+			// now calculate total string size, and add that to the beginning (using 3 bytes)
+			std::string size_string = "";
+			size_string += (char)(uint8_t(result.size() >> 16));
+			size_string += (char)(uint8_t((result.size() >> 8) % 256));
+			size_string += (char)(uint8_t(result.size() % 256));
+			// combine
+			result = size_string + result;
+			return result;
+		}
+		// info
+		uint8_t id;
 		glm::vec3 position;
 		glm::quat rotation;
 	};
 	std::unordered_map< Connection *, PlayerInfo > players;
+	players.reserve(player_amount); 
 
 	while (true) {
+
+		// play sound check
+		{
+			// only start when there are more than 2 players
+			if(players.size() >= 2){
+				static auto prev_play_time = std::chrono::steady_clock::now();
+				auto now = std::chrono::steady_clock::now();
+				if(std::chrono::duration< float >(now-prev_play_time).count() >= soundWaitTime){
+					prev_play_time = std::chrono::steady_clock::now();
+					playSound = true;
+				}
+				else{
+					playSound = false;
+				}
+			}
+		}
+
 		static auto next_tick = std::chrono::steady_clock::now() + std::chrono::duration< double >(ServerTick);
 		//process incoming data from clients until a tick has elapsed:
 		while (true) {
@@ -78,11 +124,14 @@ int main(int argc, char **argv) {
 			server.poll([&](Connection *c, Connection::Event evt){
 				if (evt == Connection::OnOpen) {
 					//client connected:
-
 					//create some player info for them:
 					players.emplace(c, PlayerInfo());
-
-
+					// refuse connection if over size
+					if(players.size() > player_amount){
+						//shut down client connection:
+							c->close();
+							return;
+					}
 				} else if (evt == Connection::OnClose) {
 					//client disconnected:
 
@@ -90,8 +139,6 @@ int main(int argc, char **argv) {
 					auto f = players.find(c);
 					assert(f != players.end());
 					players.erase(f);
-
-
 				} else { assert(evt == Connection::OnRecv);
 					//got data from client:
 					//std::cout << "got bytes:\n" << hex_dump(c->recv_buffer); std::cout.flush();
@@ -102,8 +149,10 @@ int main(int argc, char **argv) {
 					PlayerInfo &player = f->second;
 
 					// --------------- handle messages from client ---------------- //
-					while (c->recv_buffer.size() >= 9) {
-						// expecting 9-byte messages 'b' (1 + 1x4 + 4)
+					size_t client_mes_size = 1 + sizeof(glm::vec3) + sizeof(glm::quat);
+					while (c->recv_buffer.size() >= client_mes_size) {
+						size_t index = 0;
+						// expecting messages 'b' 
 						char type = c->recv_buffer[0];
 						if (type != 'b') {
 							std::cout << " message of non-'b' type received from client!" << std::endl;
@@ -111,60 +160,50 @@ int main(int argc, char **argv) {
 							c->close();
 							return;
 						}
-						// 4 boold
-						bool left_pressed = c->recv_buffer[1];
-						bool right_pressed = c->recv_buffer[2];
-						bool down_pressed = c->recv_buffer[3];
-						bool up_pressed = c->recv_buffer[4];
-						// 1 float, as 4 bytes
-						union float_as_byte
-						{
-								float   f;
-								unsigned char bytes[4];
-						} mouse_x;
-						mouse_x.bytes[0] = c->recv_buffer[5];
-						mouse_x.bytes[1] = c->recv_buffer[6];
-						mouse_x.bytes[2] = c->recv_buffer[7];
-						mouse_x.bytes[3] = c->recv_buffer[8];
-						//std::cout << "x: " + std::to_string(mouse_x.f) <<  "\n";
-						// erase 9 bytes
-						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 9);
+						index += 1;
+						// position
+						vec3_as_byte position;
+						for (size_t j =0; j < sizeof(glm::vec3); j++){
+							position.bytes_value[j] = c->recv_buffer[index+j];
+						}
+						player.position = position.vec3_value;
+						index += sizeof(glm::vec3);
+						// rotation
+						quat_as_byte rotation;
+						for (size_t j =0; j < sizeof(glm::quat); j++){
+							rotation.bytes_value[j] = c->recv_buffer[index+j];
+						}
+						player.rotation = rotation.quat_value;
+						// erase bytes
+						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + client_mes_size);
 					}
 				}
 			}, remain);
 		}
 
-		//update current game state
-		//TODO: replace with *your* game state update
-		std::string status_message = "";
-		int32_t overall_sum = 0;
+		// ----------- send updated game state to all clients -------------- //
 		for (auto &[c, player] : players) {
-			std::cout << "socket: " << c->socket << std::endl;
-			// (void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
-			// for (; player.left_presses > 0; --player.left_presses) {
-			// 	player.total -= 1;
-			// }
-			// for (; player.right_presses > 0; --player.right_presses) {
-			// 	player.total += 1;
-			// }
-			// for (; player.down_presses > 0; --player.down_presses) {
-			// 	player.total -= 10;
-			// }
-			// for (; player.up_presses > 0; --player.up_presses) {
-			// 	player.total += 10;
-			// }
-			// if (status_message != "") status_message += " + ";
-			// status_message += std::to_string(player.total) + " (" + player.name + ")";
 
-			// overall_sum += player.total;
-		}
-		status_message += " = " + std::to_string(overall_sum);
-		//std::cout << status_message << std::endl; //DEBUG
-
-		//send updated game state to all clients
-		//TODO: update for your game state
-		for (auto &[c, player] : players) {
 			(void)player; //work around "unused variable" warning on whatever g++ github actions uses
+			// construct a status message
+			std::string status_message = "";
+
+			// ------- put public message (same for all player) ------- //
+			status_message += (char)playSound;
+
+			// ------- put all players' infos -------- //
+			// put the info of client itself at first
+			auto f = players.find(c);
+			assert(f != players.end());
+			PlayerInfo &player = f->second;
+			status_message += player.toByteString();
+			// put the info of other players 
+			for (auto &[c_other, player_other] : players){
+				if (c != c_other){
+					status_message += player_other.toByteString();
+				}
+			}
+
 			//send an update starting with 'm', a 24-bit size, and a blob of text:
 			c->send('m');
 			c->send(uint8_t(status_message.size() >> 16));

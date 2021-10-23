@@ -144,6 +144,8 @@ CLIENT_NAMES =
 	Sound
 	load_wav
 	load_opus
+	TextRenderer
+	TextRenderProgram
 	;
 
 SERVER_NAMES =
