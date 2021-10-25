@@ -67,7 +67,7 @@ PlayMode::PlayMode(Client &client_) : client(client_),scene(*stage_scene) {
 	scene.transforms.emplace_back();
 	scene.cameras.emplace_back(&scene.transforms.back());
 	player.camera = &scene.cameras.back();
-	player.camera->fovy = glm::radians(60.0f);
+	player.camera->fovy = glm::radians(70.0f);
 	player.camera->near = 0.01f;
 	player.camera->transform->parent = player.transform;
 
@@ -75,7 +75,7 @@ PlayMode::PlayMode(Client &client_) : client(client_),scene(*stage_scene) {
 	player.camera->transform->position = cameraOffset;
 
 	//rotate camera facing direction (-z) to player facing direction (+y):
-	player.camera->transform->rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+	player.camera->transform->rotation = glm::angleAxis(glm::radians(60.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
 	// font
 	hintFont = std::make_shared<TextRenderer>(data_path("OpenSans-B9K8.ttf"));
@@ -138,12 +138,12 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			glm::vec3 up = glm::vec3(0,0,1);
 			player.transform->rotation = glm::angleAxis(-player.mouse_x * player.camera->fovy, up) * player.transform->rotation;
 
-			float pitch = glm::pitch(player.camera->transform->rotation);
-			pitch += player.mouse_y * player.camera->fovy;
+			//float pitch = glm::pitch(player.camera->transform->rotation);
+			//pitch += player.mouse_y * player.camera->fovy;
 			//camera looks down -z (basically at the player's feet) when pitch is at zero.
-			pitch = std::min(pitch, 0.95f * 3.1415926f);
-			pitch = std::max(pitch, 0.05f * 3.1415926f);
-			player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
+			//pitch = std::min(pitch, 0.95f * 3.1415926f);
+			//pitch = std::max(pitch, 0.05f * 3.1415926f);
+			//player.camera->transform->rotation = glm::angleAxis(pitch, glm::vec3(1.0f, 0.0f, 0.0f));
 
 			return true;
 		}
@@ -163,16 +163,19 @@ void PlayMode::update(float elapsed) {
 		if (down.pressed && !up.pressed) force.y =-1.0f;
 		if (!down.pressed && up.pressed) force.y = 1.0f;
 		// update velocity
-		glm::vec2 newVelocity = glm::vec3(0);
+		glm::vec3 newVelocity = glm::vec3(0.0f);
 		// apllying force (has input)
 		if (force != glm::vec2(0.0f)) {
 			force = glm::normalize(force);
-			// new velicoty
-			newVelocity = curVelocity + force * acceleration * elapsed;
+			
+			glm::vec3 rotatedForce = player.transform->make_local_to_world() * glm::vec4(force.x, force.y, 0.0f, 0.0f);
+			// new velocity
+			newVelocity = curVelocity + rotatedForce *acceleration* elapsed;
+			//newVelocity = curVelocity + force * acceleration * elapsed;
 		}
 		// no force, use firction
 		else{
-			if (curVelocity != glm::vec2(0)){
+			if (curVelocity != glm::vec3(0.0f)){
 				newVelocity = curVelocity - glm::normalize(curVelocity) * friction * elapsed;
 				// make sure frictiuon does not change the direction
 				if ((curVelocity.x>0 && newVelocity.x <0) || (curVelocity.x<0 && newVelocity.x >0))
@@ -185,16 +188,17 @@ void PlayMode::update(float elapsed) {
 		glm::vec2 move = (newVelocity + curVelocity) / 2.0f * elapsed;
 		curVelocity = newVelocity;
 		// update position
-		player.transform->position += player.transform->make_local_to_world() * glm::vec4(move.x, move.y, 0.0f, 0.0f);
+		player.transform->position += glm::vec3(move.x, move.y, 0.0f);
 		// update my model's transform, if i know which model is mine
 		if(player.id!=0){
 			players_transform[player.id-1]->position = player.transform->position;
 			players_transform[player.id-1]->rotation = player.transform->rotation;
+			players_velocity[player.id - 1] = curVelocity;
 		}
 	}
 
 	// sending my info (position , rotation) to server:
-	if (left.pressed || right.pressed || down.pressed || up.pressed || player.mouse_x!=0 ) {
+	{
 		// type 'b' message : char + vec3 + quat
 		// char
 		client.connections.back().send('b');
@@ -209,6 +213,12 @@ void PlayMode::update(float elapsed) {
 		rotation_bytes.quat_value = player.transform->rotation;
 		for (size_t i =0; i < sizeof(glm::quat); i++){
 			client.connections.back().send(rotation_bytes.bytes_value[i]);
+		}
+		// velocity
+		vec3_as_byte velocity_bytes;
+		velocity_bytes.vec3_value = curVelocity;
+		for (size_t i = 0; i < sizeof(glm::vec3); i++) {
+			client.connections.back().send(velocity_bytes.bytes_value[i]);
 		}
 	}
 
@@ -271,6 +281,11 @@ void PlayMode::update(float elapsed) {
 			for (size_t j =0; j < sizeof(glm::quat); j++){
 				rotation.bytes_value[j] = content[j+1+sizeof(glm::vec3)];
 			}
+			// velocity
+			vec3_as_byte velocity;
+			for (size_t j = 0; j < sizeof(glm::vec3); j++) {
+				velocity.bytes_value[j] = content[j + 1 + sizeof(glm::vec3) + sizeof(glm::quat)];
+			}
 
 			// is this my info ? (server will put my own info at first)
 			if(i == i_offset){
@@ -289,6 +304,7 @@ void PlayMode::update(float elapsed) {
 				players_transform[id-1]->draw = true;
 				players_transform[id-1]->position = position.vec3_value;
 				players_transform[id-1]->rotation = rotation.quat_value;
+				players_velocity[id-1] = velocity.vec3_value;
 			}
 
 			// move to next player's info

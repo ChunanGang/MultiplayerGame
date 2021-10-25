@@ -31,6 +31,7 @@ struct PlayMode : Mode {
 	Scene scene;
 	// transforms of other players
 	std::array <Scene::Transform *, 4> players_transform;
+	std::array <glm::vec3, 4> players_velocity;
 
 	// player info
 	struct Player {
@@ -45,11 +46,11 @@ struct PlayMode : Mode {
 
 	// game logics
 	// players
-	const glm::vec3 cameraOffset = glm::vec3(0.0f, -0.7f, .7f);;
+	const glm::vec3 cameraOffset = glm::vec3(0.0f, -1.5f, 1.2f);;
 	const glm::vec3 playerInitPos = glm::vec3(-7,-1,0);
 	const glm::vec3 playerInitPosDistance = glm::vec3(0,-1.5f,0);
 	const glm::quat playerInitRot = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-	glm::vec2 curVelocity = glm::vec3(0);
+	glm::vec3 curVelocity = glm::vec3(0.0f);
 	float acceleration = 1.5f;
 	float friction = 1.0f;
 	// sound

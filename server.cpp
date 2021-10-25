@@ -44,7 +44,7 @@ int main(int argc, char **argv) {
 
 
 	//------------ main loop ------------
-	constexpr float ServerTick = 1.0f / 20.0f; // set a server tick that makes sense for your game
+	constexpr float ServerTick = 1.0f / 60.0f; // set a server tick that makes sense for your game
 
 	//server state:
 	const uint16_t player_amount = 4; // only max 4 players in the game for now
@@ -59,6 +59,7 @@ int main(int argc, char **argv) {
 			next_player_id += 1;
 			position = glm::vec3(-7,-1,0);;
 			rotation = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+			velocity = glm::vec3(0.0f);
 		}
 		// convert player's info into bytes, with form of string
 		std::string toByteString(){
@@ -77,6 +78,14 @@ int main(int argc, char **argv) {
 			for (size_t i =0; i < sizeof(rotation); i++){
 				result += rotation_bytes.bytes_value[i];
 			}
+
+			//velocity
+			vec3_as_byte velocity_bytes;
+			velocity_bytes.vec3_value = velocity;
+			for (size_t i = 0; i < sizeof(velocity); i++) {
+				result += velocity_bytes.bytes_value[i];
+			}
+
 			// now calculate total string size, and add that to the beginning (using 3 bytes)
 			std::string size_string = "";
 			size_string += (char)(uint8_t(result.size() >> 16));
@@ -90,6 +99,7 @@ int main(int argc, char **argv) {
 		uint8_t id;
 		glm::vec3 position;
 		glm::quat rotation;
+		glm::vec3 velocity;
 	};
 	std::unordered_map< Connection *, PlayerInfo > players;
 	players.reserve(player_amount); 
@@ -149,7 +159,7 @@ int main(int argc, char **argv) {
 					PlayerInfo &player = f->second;
 
 					// --------------- handle messages from client ---------------- //
-					size_t client_mes_size = 1 + sizeof(glm::vec3) + sizeof(glm::quat);
+					size_t client_mes_size = 1 + 2 * sizeof(glm::vec3) + sizeof(glm::quat);
 					while (c->recv_buffer.size() >= client_mes_size) {
 						size_t index = 0;
 						// expecting messages 'b' 
@@ -174,6 +184,14 @@ int main(int argc, char **argv) {
 							rotation.bytes_value[j] = c->recv_buffer[index+j];
 						}
 						player.rotation = rotation.quat_value;
+						index += sizeof(glm::quat);
+						// velocity
+						vec3_as_byte velocity;
+						for (size_t j = 0; j < sizeof(glm::vec3); j++) {
+							velocity.bytes_value[j] = c->recv_buffer[index + j];
+						}
+						player.velocity = velocity.vec3_value;
+						index += sizeof(glm::vec3);
 						// erase bytes
 						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + client_mes_size);
 					}
