@@ -6,6 +6,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <iostream>
+#include <random>
 #include <cassert>
 #include <unordered_map>
 
@@ -48,8 +49,9 @@ int main(int argc, char **argv) {
 
 	//server state:
 	const uint16_t player_amount = 4; // only max 4 players in the game for now
-	const float soundWaitTime = 6.0f; // play sound every this much time
+	float soundWaitTime = 6.0f; // play sound every this much time
 	bool playSound = false;
+	uint8_t player_win = 0;
 
 	//per-client state:
 	struct PlayerInfo {
@@ -109,17 +111,18 @@ int main(int argc, char **argv) {
 		// play sound check
 		{
 			// only start when there are more than 2 players
-			if(players.size() >= 2){
-				static auto prev_play_time = std::chrono::steady_clock::now();
-				auto now = std::chrono::steady_clock::now();
-				if(std::chrono::duration< float >(now-prev_play_time).count() >= soundWaitTime){
-					prev_play_time = std::chrono::steady_clock::now();
-					playSound = true;
-				}
-				else{
-					playSound = false;
-				}
+			
+			static auto prev_play_time = std::chrono::steady_clock::now();
+			auto now = std::chrono::steady_clock::now();
+			if(std::chrono::duration< float >(now-prev_play_time).count() >= soundWaitTime){
+				prev_play_time = std::chrono::steady_clock::now();
+				playSound = true;
+				soundWaitTime = (float)(std::rand() % 3 + 9);
 			}
+			else{
+				playSound = false;
+			}
+			
 		}
 
 		static auto next_tick = std::chrono::steady_clock::now() + std::chrono::duration< double >(ServerTick);
@@ -192,6 +195,13 @@ int main(int argc, char **argv) {
 						}
 						player.velocity = velocity.vec3_value;
 						index += sizeof(glm::vec3);
+
+						//check win
+						if (player_win == 0 && player.position.y > 17.0f) {
+							player_win = player.id;
+						}
+
+
 						// erase bytes
 						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + client_mes_size);
 					}
@@ -208,6 +218,7 @@ int main(int argc, char **argv) {
 
 			// ------- put public message (same for all player) ------- //
 			status_message += (char)playSound;
+			status_message += (char)player_win;
 
 			// ------- put all players' infos -------- //
 			// put the info of client itself at first

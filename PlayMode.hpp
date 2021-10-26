@@ -32,6 +32,8 @@ struct PlayMode : Mode {
 	// transforms of other players
 	std::array <Scene::Transform *, 4> players_transform;
 	std::array <glm::vec3, 4> players_velocity;
+	Scene::Transform* cat;
+	float cat_degree = 180.0f;
 
 	// player info
 	struct Player {
@@ -46,18 +48,25 @@ struct PlayMode : Mode {
 
 	// game logics
 	// players
-	const glm::vec3 cameraOffset = glm::vec3(0.0f, -1.5f, 1.2f);;
-	const glm::vec3 playerInitPos = glm::vec3(-7,-1,0);
-	const glm::vec3 playerInitPosDistance = glm::vec3(0,-1.5f,0);
-	const glm::quat playerInitRot = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+	const glm::vec3 cameraOffset = glm::vec3(2.0f, 1.5f, 0.0f);
+	const glm::vec3 playerInitPos = glm::vec3(3.0f, -19.0f, 0.0f);
+	const glm::vec3 playerInitPosDistance = glm::vec3(-2.0f, -0.0f, 0.0f);
+	const glm::quat playerInitRot = glm::angleAxis(glm::radians(-90.0f), glm::vec3(0.0f, 0.0f, 1.0f)) * glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+	const float acceleration = 1.5f;
+	const float friction = 1.0f;
+
 	glm::vec3 curVelocity = glm::vec3(0.0f);
-	float acceleration = 1.5f;
-	float friction = 1.0f;
+
+	//stage
+	const glm::vec2 stageRange = glm::vec2(4.0f, 20.0f);
+	const float playerRange = 0.9f;
+	uint8_t player_win = 0;
+
 	// sound
 	bool playingSound = false;
 	bool startCountDown = false;
-	const float countDownTime = 3.0f;
-	bool canMove = false;
+	const float countDownTime = 6.0f;
+	bool canMove = true;
 
 	//last message from server:
 	std::string server_message;
